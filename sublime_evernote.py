@@ -1,129 +1,268 @@
 #coding:utf-8
+import os
 import sys
-sys.path.insert(0,"lib")
-import evernote.edam.userstore.UserStore as UserStore
-import evernote.edam.notestore.NoteStore as NoteStore
+
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+_LIB = os.path.join(_ROOT, 'lib')
+# Sublime loads this file by path and does not put the package directory on
+# sys.path. note_format lives next to this file; Evernote and its
+# dependencies live in lib/.
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+
+import note_format
+
 import evernote.edam.type.ttypes as Types
 import evernote.edam.error.ttypes as Errors
 from evernote.api.client import EvernoteClient
-import sublime,sublime_plugin
+import sublime
+import sublime_plugin
 import markdown2
 import webbrowser
 
-consumer_key = 'oparrish-4096'
-consumer_secret ='c112c6417738f06a'
-evernoteHost = "www.evernote.com"
-callbackUrl = "http://127.0.0.1/sublimeevernote/callback"
-settings = sublime.load_settings("SublimeEvernote.sublime-settings")
+callbackUrl = 'http://127.0.0.1/sublimeevernote/callback'
+settings = sublime.load_settings('SublimeEvernote.sublime-settings')
+
+_MISSING = object()
+_AUTH_ERRORS = (
+    Errors.EDAMErrorCode.INVALID_AUTH,
+    Errors.EDAMErrorCode.AUTH_EXPIRED,
+)
+MISSING_CREDENTIALS = (
+    'Evernote consumer_key and consumer_secret are not set. '
+    'Open Evernote Settings and add the API key for this plugin.'
+)
+
+
+def to_api_str(value):
+    """Encode text for this Python 2 Thrift stack, which writes raw bytes."""
+    if value is None:
+        return ''
+    try:
+        text_type = unicode
+    except NameError:
+        text_type = str
+    if isinstance(value, text_type):
+        if text_type is str:
+            return value
+        return value.encode('utf-8')
+    return value
+
+
+def configured_host():
+    return settings.get('service_host') or 'www.evernote.com'
+
+
+def configured_sandbox():
+    sandbox = settings.get('sandbox')
+    if sandbox is None:
+        return False
+    return bool(sandbox)
 
 
 def get_evernote_client(token=None):
+    host = configured_host()
+    sandbox = configured_sandbox()
     if token:
-        return EvernoteClient(token=token,service_host=evernoteHost, sandbox=False)
-    else:
-        return EvernoteClient(
-            consumer_key=consumer_key,
-            consumer_secret=consumer_secret,
-            service_host=evernoteHost, 
-            sandbox=False
-        )    
+        return EvernoteClient(token=token, service_host=host, sandbox=sandbox)
+    key = settings.get('consumer_key') or ''
+    secret = settings.get('consumer_secret') or ''
+    if not key or not secret:
+        return None
+    return EvernoteClient(
+        consumer_key=key,
+        consumer_secret=secret,
+        service_host=host,
+        sandbox=sandbox,
+    )
+
 
 class SendToEvernoteCommand(sublime_plugin.TextCommand):
-    def __init__(self,view):
-        self.view = view    
-        self.window = sublime.active_window()
+    def __init__(self, view):
+        sublime_plugin.TextCommand.__init__(self, view)
+        self.window = view.window() or sublime.active_window()
+
+    def _require_window(self):
+        if self.window is None:
+            sublime.error_message('No window is available for Evernote.')
+            return False
+        return True
 
     def to_markdown_html(self):
-        encoding = self.view.encoding()
-        if encoding == 'Undefined':
-            encoding = 'utf-8'
-        elif encoding == 'Western (Windows 1252)':
-            encoding = 'windows-1252'
-
-
-        sels = self.view.sel()
         contents = ''
-        if sels:
-            for sel in sels: contents += self.view.substr(sel) + '\n\n'   
+        for sel in self.view.sel():
+            contents += self.view.substr(sel) + '\n\n'
 
         if not contents.strip():
-            region = sublime.Region(0L, self.view.size())
-            contents = self.view.substr(region) 
+            region = sublime.Region(0, self.view.size())
+            contents = self.view.substr(region)
 
-        markdown_html = markdown2.markdown(contents, extras=['footnotes', 'fenced-code-blocks', 'cuddled-lists', 'code-friendly', 'metadata'])
-        return markdown_html
+        return markdown2.markdown(contents, extras=[
+            'footnotes',
+            'fenced-code-blocks',
+            'cuddled-lists',
+            'code-friendly',
+            'metadata',
+        ])
 
-    def connect(self,callback,**kwargs):
-        sublime.status_message("authenticate..., please wait...")   
-        client = get_evernote_client()    
-        request_token = client.get_request_token(callbackUrl)
+    def connect(self, callback, title=_MISSING, tags=_MISSING):
+        if not self._require_window():
+            return
+        client = get_evernote_client()
+        if client is None:
+            sublime.error_message(MISSING_CREDENTIALS)
+            return
+
+        sublime.status_message('authenticate..., please wait...')
+        try:
+            request_token = client.get_request_token(callbackUrl)
+            authorize_url = client.get_authorize_url(request_token)
+        except Exception as e:
+            sublime.error_message('Evernote authentication failed: %s' % e)
+            return
 
         def on_verifier(verifier):
-            access_token =  client.get_access_token(request_token['oauth_token'],request_token['oauth_token_secret'],verifier)
-            settings.set('access_token',access_token)
-            sublime.save_settings('SublimeEvernote.sublime-settings') 
-            sublime.status_message("authenticate ok")
-            callback(**kwargs)
+            verifier = (verifier or '').strip()
+            if not verifier:
+                sublime.error_message('The OAuth verifier is required.')
+                return
+            try:
+                access_token = client.get_access_token(
+                    request_token['oauth_token'],
+                    request_token['oauth_token_secret'],
+                    verifier,
+                )
+            except Exception as e:
+                sublime.error_message('Evernote authentication failed: %s' % e)
+                return
+            settings.set('access_token', access_token)
+            sublime.save_settings('SublimeEvernote.sublime-settings')
+            sublime.status_message('authenticate ok')
+            callback(title=title, tags=tags)
 
-        webbrowser.open(client.get_authorize_url(request_token))
-        self.window.show_input_panel("type Verifier (required):",'',on_verifier,None,None) 
+        webbrowser.open(authorize_url)
+        self.window.show_input_panel(
+            'type Verifier (required):', '', on_verifier, None, None)
 
-    def send_note(self,**kwargs):
+    def _clear_access_token(self):
+        settings.erase('access_token')
+        sublime.save_settings('SublimeEvernote.sublime-settings')
+
+    def send_note(self, title=_MISSING, tags=_MISSING):
         access_token = settings.get('access_token')
-        client,noteStore = None,None
-        if access_token :
-            client = get_evernote_client(token=access_token)    
-        else:
-            return self.connect(self.send_note,**kwargs)
-            
+        if not access_token:
+            return self.connect(self.send_note, title=title, tags=tags)
+
+        client = get_evernote_client(token=access_token)
+        if client is None:
+            sublime.error_message(MISSING_CREDENTIALS)
+            return
+
         try:
-            noteStore = client.get_note_store()     
+            note_store = client.get_note_store()
         except Exception as e:
-            if sublime.ok_cancel_dialog('error %s! retry?'%e):
-                self.connect(self.send_note,**kwargs)
+            if sublime.ok_cancel_dialog(
+                'Could not open the note store (%s). Re-authenticate?' % e
+            ):
+                self._clear_access_token()
+                self.connect(self.send_note, title=title, tags=tags)
+            return
 
         markdown_html = self.to_markdown_html()
+        metadata = getattr(markdown_html, 'metadata', None) or {}
+        title_provided = title is not _MISSING
+        tags_provided = tags is not _MISSING
+        resolved_title, resolved_tags, tags_ready = note_format.resolve_note_fields(
+            metadata,
+            '' if not title_provided else title,
+            None if not tags_provided else tags,
+            title_provided,
+            tags_provided,
+        )
 
-        def sendnote(title,tags):
+        def sendnote(note_title, note_tags):
+            err = note_format.title_error(note_title)
+            if err:
+                sublime.error_message(err)
+                return
+            note_tags = note_format.normalize_tags(note_tags)
+            err = note_format.tags_error(note_tags)
+            if err:
+                sublime.error_message(err)
+                return
+            enml = note_format.build_enml(markdown_html)
+            err = note_format.content_error(enml)
+            if err:
+                sublime.error_message(err)
+                return
+
             note = Types.Note()
-            note.title = title.encode('utf-8')
-            note.content = '<?xml version="1.0" encoding="UTF-8"?>'
-            note.content += '<!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd">'
-            note.content += '<en-note>%s'%markdown_html.encode('utf-8')
-            note.content += '</en-note>'
-            note.tagNames = tags and tags.split(",") or []
+            note.title = to_api_str(note_format.normalize_title(note_title))
+            note.content = to_api_str(enml)
+            note.tagNames = [to_api_str(tag) for tag in note_tags]
             try:
-                sublime.status_message("please wait...")   
-                cnote = noteStore.createNote(access_token, note)   
-                sublime.status_message("send success guid:%s"%cnote.guid)  
-                sublime.message_dialog("success") 
+                sublime.status_message('please wait...')
+                created = note_store.createNote(access_token, note)
+                sublime.status_message('send success guid:%s' % created.guid)
+                sublime.message_dialog('success')
             except Errors.EDAMUserException as e:
-                args = dict(title=title,tags=tags)
-                if e.errorCode == 9:
-                    self.connect(self.send_note,**args)
+                if e.errorCode in _AUTH_ERRORS:
+                    self._clear_access_token()
+                    self.connect(
+                        self.send_note,
+                        title=note_format.normalize_title(note_title),
+                        tags=note_tags,
+                    )
+                    return
+                sublime.error_message('Evernote rejected the note (%s).' % e)
+            except Exception as e:
+                sublime.error_message('error %s' % e)
+
+        def prompt_tags(note_title):
+            if not self._require_window():
+                return
+
+            def on_tags(raw):
+                sendnote(note_title, raw)
+
+            self.window.show_input_panel(
+                'Tags (Optional)::', '', on_tags, None, None)
+
+        def prompt_title():
+            if not self._require_window():
+                return
+
+            def on_title(raw):
+                cleaned = note_format.normalize_title(raw)
+                err = note_format.title_error(cleaned)
+                if err:
+                    sublime.error_message(err)
+                    prompt_title()
+                    return
+                if tags_ready:
+                    sendnote(cleaned, resolved_tags)
                 else:
-                    if sublime.ok_cancel_dialog('error %s! retry?'%e):
-                        self.connect(self.send_note,**args)
-            except  Exception as e:
-                sublime.error_message('error %s'%e)
+                    prompt_tags(cleaned)
 
-        def on_title(title):
-            def on_tags(tags):
-                sendnote(title,tags)
-            if not 'tags' in markdown_html.metadata:
-                self.window.show_input_panel("Tags (Optional)::","",on_tags,None,None) 
-            else:
-                sendnote(title, markdown_html.metadata['tags'])
+            self.window.show_input_panel(
+                'Title (required)::', '', on_title, None, None)
 
-        if not(kwargs.get("title") or 'title' in markdown_html.metadata):
-            self.window.show_input_panel("Title (required)::","",on_title,None,None)
-        elif not kwargs.get("tags"):
-            on_title(markdown_html.metadata['title'])
-        else:    
-            sendnote(kwargs.get("title"),kwargs.get("tags")) 
+        if not resolved_title:
+            prompt_title()
+            return
+        err = note_format.title_error(resolved_title)
+        if err:
+            sublime.error_message(err)
+            return
+        if not tags_ready:
+            prompt_tags(resolved_title)
+            return
+        sendnote(resolved_title, resolved_tags)
 
     def run(self, edit):
-        if not settings.get("access_token"):
+        if not settings.get('access_token'):
             self.connect(self.send_note)
         else:
             self.send_note()

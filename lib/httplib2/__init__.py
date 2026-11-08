@@ -34,14 +34,25 @@ import StringIO
 import gzip
 import zlib
 
-# Force loading of SSL-enabled httplib for Linux users
+# Force loading of SSL-enabled httplib for Linux users.
+# Sublime Text 2's Linux Python was built without SSL in the stock httplib.
+# Load the copy next to this package rather than assuming the package folder
+# is named SublimeEvernote. Fall back to the system httplib if that fails.
+import os
 import sublime
 if sublime.platform() == 'linux':
-  import imp
-  import os
-  lib_folder = os.path.join(sublime.packages_path(), 'SublimeEvernote', 'lib')
-  m_info = imp.find_module('httplib', [lib_folder])
-  m = imp.load_module('httplib', *m_info)
+    import imp
+    lib_folder = os.path.normpath(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir))
+    httplib_file = None
+    try:
+        httplib_file, pathname, description = imp.find_module('httplib', [lib_folder])
+        imp.load_module('httplib', httplib_file, pathname, description)
+    except Exception:
+        pass
+    finally:
+        if httplib_file:
+            httplib_file.close()
 import httplib
 
 import urlparse

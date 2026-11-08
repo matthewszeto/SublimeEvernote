@@ -1,0 +1,12 @@
+{
+	// Evernote API consumer credentials. Create a key for this plugin and
+	// set it in the User settings file (Command Palette: Evernote Settings).
+	// Leave the copies in this package file empty.
+	"consumer_key": "",
+	"consumer_secret": "",
+
+	// Production Evernote. Point service_host at sandbox.evernote.com and
+	// set sandbox to true when using a sandbox key.
+	"service_host": "www.evernote.com",
+	"sandbox": false
+}

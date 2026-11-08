@@ -80,6 +80,10 @@ The target in `Readme.md` is Sublime Text 2 (Python 2.6). `sublime.Region(0L, ..
 
 `createNote(access_token, note)` was checked against `Store.__getattr__` and `NoteStore.createNote(authenticationToken, note)`. The wrapper sees a bound method whose arg list is one longer than the call and forwards the token as `authenticationToken`. That call is correct. Title and body `.encode('utf-8')` matches this Thrift stack, which writes strings as raw bytes.
 
+## Applied in the follow-up
+
+The follow-up commit applies the eight fixes below. The rewrite also replaces `0L` with `0` and calls `TextCommand.__init__`. Sublime Text 3 and 4 still cannot import the vendored Python 2 libraries. Uploading images as `en-media`, a local OAuth callback listener, a notebook picker, and rotating the historical consumer secret are unchanged. The secret is no longer read from source. It is still in git history and still needs to be rotated at Evernote.
+
 ## Fixes in the follow-up
 
 1. Stop sending when the note store cannot be opened, and preserve the resolved title and tags across re-authentication for both `INVALID_AUTH` and `AUTH_EXPIRED`.

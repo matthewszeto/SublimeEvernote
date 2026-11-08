@@ -1,3 +1,5 @@
+from __future__ import absolute_import
+
 import sys
 import functools
 import inspect
@@ -12,6 +14,7 @@ import evernote.edam.userstore.constants as UserStoreConstants
 
 import thrift.protocol.TBinaryProtocol as TBinaryProtocol
 import thrift.transport.THttpClient as THttpClient
+import note_format
 
 
 class EvernoteClient(object):
@@ -35,8 +38,9 @@ class EvernoteClient(object):
             self._get_endpoint('oauth'), urllib.quote(callback_url))
 
         resp, content = client.request(request_url, 'GET')
-        request_token = dict(urlparse.parse_qsl(content))
-        return request_token
+        request_token = dict(urlparse.parse_qsl(content or ''))
+        return note_format.require_oauth_fields(
+            resp.get('status'), request_token, require_secret=True)
 
     def get_authorize_url(self, request_token):
         return '%s?oauth_token=%s' % (
@@ -51,7 +55,9 @@ class EvernoteClient(object):
         client = self._get_oauth_client(token)
 
         resp, content = client.request(self._get_endpoint('oauth'), 'POST')
-        access_token = dict(urlparse.parse_qsl(content))
+        access_token = dict(urlparse.parse_qsl(content or ''))
+        access_token = note_format.require_oauth_fields(
+            resp.get('status'), access_token)
         self.token = access_token['oauth_token']
         return self.token
 
