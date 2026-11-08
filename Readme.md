@@ -31,6 +31,17 @@ or clone this repository in
 
 `Context menu` > `Evernote settings`
 
+### Configuration
+
+Set an Evernote API consumer key before the first send. `Command Palette` > `Evernote Settings`, then:
+
+    {
+        "consumer_key": "your key",
+        "consumer_secret": "your secret"
+    }
+
+`service_host` defaults to `www.evernote.com`. `sandbox` defaults to false. Use `sandbox.evernote.com` and `"sandbox": true` for a sandbox key.
+
 #### Markdown Support ####
 
 Write notes in Markdown and they will be processed when they are sent to Evernote.
